@@ -17,7 +17,7 @@ To run this project, you will need:
 
 1. Clone this repository:
     ```
-    git clone https://github.com/your-repo/stock-price-predictor.git
+    git clone https://github.com/DGaffney/futures.git
     ```
 2. Build the Docker images:
     ```
