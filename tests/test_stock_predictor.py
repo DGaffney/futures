@@ -1,79 +1,141 @@
-from unittest.mock import Mock, patch
-from stock_predictor import StockPredictor
-import pandas as pd
+import pytest
+from unittest import mock
 from datetime import datetime
-from neuralprophet import NeuralProphet
+from pandas.testing import assert_frame_equal
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from .main import StockPredictor
+from .models import Prediction, Symbol
 
-# sample data for mocking
-mocked_response = {
-    'results': [
-        {'t': 1625605400000, 'c': 123.45},
-        {'t': 1625606300000, 'c': 125.45},
-        {'t': 1625607200000, 'c': 124.45}
-    ]
-}
+@pytest.fixture
+def mock_get_request_success():
+    """A mock function for successful get_request."""
 
-mocked_df = pd.DataFrame(mocked_response['results'])
-mocked_df['t'] = pd.to_datetime(mocked_df['t'], unit='ms')
-mocked_df = mocked_df[['t', 'c']]
-mocked_df.columns = ['ds', 'y']
+    def _mock_get_request_success(url: str):
+        mock_response = mock.Mock()
+        mock_response.json.return_value = {
+            "results": [{"t": 1590585600000, "c": 123.45}, {"t": 1590672000000, "c": 125.67}]
+        }
+        return mock_response
 
-# A mock NeuralProphet model
-mocked_model = Mock(spec=NeuralProphet)
+    return _mock_get_request_success
 
-# unit tests
-def test_api_url():
-    predictor = StockPredictor("API_KEY", "TEST", '2023-07-18', '2023-07-31', 1200)
-    expected_url = "https://api.polygon.io/v2/aggs/ticker/TEST/range/1/minute/2023-07-18/2023-07-31?adjusted=true&sort=asc&limit=1200&apiKey=API_KEY"
-    assert predictor.api_url() == expected_url
+@pytest.fixture
+def mock_get_request_failure():
+    """A mock function for unsuccessful get_request."""
+
+    def _mock_get_request_failure(url: str):
+        mock_response = mock.Mock()
+        mock_response.json.return_value = {"error": "API request failed."}
+        return mock_response
+
+    return _mock_get_request_failure
+
+@pytest.fixture
+def in_memory_db():
+    engine = create_engine('sqlite:///:memory:')
+    Session = sessionmaker(bind=engine)
+    return Session()
+
+@pytest.fixture
+def stock_predictor(mock_get_request_success):
+    return StockPredictor(
+        api_key="fake_api_key",
+        ticker_symbol="GOOGL",
+        start_date="2020-05-28",
+        end_date="2020-06-01",
+        limit=10,
+        get_request=mock_get_request_success
+    )
+
+
+def create_sample_data():
+    return pd.DataFrame(
+        data={
+            'ds': range(10),
+            'y': [10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+            'unique_id': 'c'
+        }
+    )
+
+def test_api_url(stock_predictor):
+    assert stock_predictor.api_url() == "https://api.polygon.io/v2/aggs/ticker/GOOGL/range/1/minute/2020-05-28/2020-06-01?adjusted=true&sort=asc&limit=10&apiKey=fake_api_key"
+
+def test_get_response_success(stock_predictor):
+    assert stock_predictor.get_response() == {"results": [{"t": 1590585600000, "c": 123.45}, {"t": 1590672000000, "c": 125.67}]}
+
+def test_get_response_failure(stock_predictor, mock_get_request_failure):
+    stock_predictor.get_request = mock_get_request_failure
+    with pytest.raises(Exception) as e:
+        stock_predictor.get_response()
+    assert str(e.value) == "API request failed."
+
+def test_response_to_df(stock_predictor):
+    data = {"results": [{"t": 1590585600000, "c": 123.45}, {"t": 1590672000000, "c": 125.67}]}
+    df = stock_predictor.response_to_df(data, 'c')
+    assert list(df.columns) == ['ds', 'y', 'unique_id']
+    assert len(df) == 2
+
+def test_interpolate_data(stock_predictor):
+    df = pd.DataFrame({"ds": [datetime(2020, 1, 1, 12), datetime(2020, 1, 1, 12, 1), datetime(2020, 1, 1, 12, 3)], "y": [1, np.nan, 3]})
+    df = stock_predictor.interpolate_data(df, 'y')
+    assert df['y'].tolist() == [1.0, 2.0, 3.0]
+
+def test_replace_time_with_timestep(stock_predictor):
+    df = pd.DataFrame({"ds": [datetime(2020, 1, 1, 12), datetime(2020, 1, 1, 12, 1), datetime(2020, 1, 1, 12, 3)], "y": [1, 2, 3]})
+    df = stock_predictor.replace_time_with_timestep(df)
+    assert df['ds'].tolist() == [0, 1, 2]
+
+def test_strip_na(stock_predictor):
+    df = pd.DataFrame({"ds": [0, 1, 2], "y": [1, np.nan, 3]})
+    df = stock_predictor.strip_na(df, 'y')
+    assert df['y'].tolist() == [1.0, 3.0]
+
+def test_fetch_data(stock_predictor):
+    df = stock_predictor.fetch_data('c')
+    assert list(df.columns) == ['ds', 'y', 'unique_id']
+    assert len(df) == 2
+
 
 @patch('requests.get')
-def test_get_response(mock_get):
-    mock_get.return_value.json.return_value = mocked_response
-    predictor = StockPredictor("API_KEY", "TEST", '2023-07-18', '2023-07-31', 1200)
-    assert predictor.get_response() == mocked_response
-
-def test_response_to_df():
-    predictor = StockPredictor("API_KEY", "TEST", '2023-07-18', '2023-07-31', 1200)
-    assert predictor.response_to_df(mocked_response).equals(mocked_df)
+def test_train_model(mock_get, stock_predictor):
+    mock_get.return_value.json.return_value = create_sample_data()
+    df = predictor.fetch_data('c')
+    model = predictor.train_model(df)
+    assert isinstance(model, StatsForecast)
 
 @patch('requests.get')
-def test_fetch_data(mock_get):
-    mock_get.return_value.json.return_value = mocked_response
-    predictor = StockPredictor("API_KEY", "TEST", '2023-07-18', '2023-07-31', 1200)
-    assert predictor.fetch_data().equals(mocked_df)
+def test_predict(mock_get, stock_predictor):
+    mock_get.return_value.json.return_value = create_sample_data()
+    df = predictor.fetch_data('c')
+    model = predictor.train_model(df)
+    forecast = predictor.predict(model, 10)
+    assert isinstance(forecast, pd.DataFrame)
 
-@patch.object(NeuralProphet, "fit")
-def test_train_model(mock_fit):
-    predictor = StockPredictor("API_KEY", "TEST", '2023-07-18', '2023-07-31', 1200)
-    mock_fit.return_value = mocked_model
-    assert isinstance(predictor.train_model(mocked_df), NeuralProphet)
+def test_add_predictions(stock_predictor):
+    session = Session()
+    symbol = Mock()
+    forecast = create_sample_data()
+    predictor.add_predictions(session, symbol, forecast)
+    assert len(symbol.predictions) == 10
 
-@patch.object(NeuralProphet, "make_future_dataframe")
-@patch.object(NeuralProphet, "predict")
-def test_predict(mock_predict, mock_make_future_dataframe):
-    predictor = StockPredictor("API_KEY", "TEST", '2023-07-18', '2023-07-31', 1200)
-    mock_forecast = Mock()
-    mock_predict.return_value = mock_forecast
-    assert predictor.predict(mocked_model, 1) is mock_forecast
+@patch('requests.get')
+def test_predict_and_save(mock_get, stock_predictor):
+    mock_get.return_value.json.return_value = create_sample_data()
+    session = Session()
+    symbol = Mock()
+    df = predictor.fetch_data('c')
+    model = predictor.train_model(df)
+    forecast = predictor.predict_and_save(session, symbol, model, 10)
+    assert isinstance(forecast, pd.DataFrame)
+    assert len(symbol.predictions) == 10
 
-@patch.object(StockPredictor, "add_predictions")
-@patch.object(StockPredictor, "predict")
-def test_predict_and_save(mock_predict, mock_add_predictions):
-    predictor = StockPredictor("API_KEY", "TEST", '2023-07-18', '2023-07-31', 1200)
-    mock_session = Mock()
-    mock_symbol = Mock()
-    mock_forecast = Mock()
-    mock_predict.return_value = mock_forecast
-    assert predictor.predict_and_save(mock_session, mock_symbol, mocked_model, 1) is mock_forecast
-    mock_add_predictions.assert_called_once_with(mock_session, mock_symbol, mock_forecast)
+def test_predict_and_save(stock_predictor, in_memory_db):
+    symbol = Symbol(name="GOOGL")
+    in_memory_db.add(symbol)
+    in_memory_db.commit()
 
-@patch.object(StockPredictor, "predict_and_save")
-@patch.object(StockPredictor, "train_model")
-@patch.object(StockPredictor, "fetch_data")
-def test_prepare_predict_and_save(mock_fetch_data, mock_train_model, mock_predict_and_save):
-    predictor = StockPredictor("API_KEY", "TEST", '2023-07-18', '2023-07-31', 1200)
-    mock_fetch_data.return_value = mocked_df
-    mock_train_model.return_value = mocked_model
-    predictor.prepare_predict_and_save(Mock(), Mock(), 1)
-    mock_predict_and_save.assert_called_once()
+    model = stock_predictor.train_model(df=stock_predictor.fetch_data('c'))
+    stock_predictor.predict_and_save(in_memory_db, symbol, model, periods=10)
+
+    assert in_memory_db.query(Prediction).count() == 10
