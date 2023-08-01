@@ -1,0 +1,9 @@
+psycopg2
+fastapi
+sqlalchemy
+statsforecast
+pandas
+requests
+pytest
+pytest-mock
+uvicorn

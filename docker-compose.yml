@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - POLYGON_API_KEY=${POLYGON_API_KEY}
+      - DATABASE_URL=postgresql://futures:icanseeclearly@futures_db/dbname
+    depends_on:
+      - db
+    image: futures
+    volumes:
+      - ./:/app
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=futures
+      - POSTGRES_PASSWORD=icanseeclearly
+      - POSTGRES_DB=futures_db
+    volumes:
+      - ./data/db:/var/lib/postgresql/data
