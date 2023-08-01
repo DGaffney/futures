@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 import pandas as pd
 from .models import Prediction, Symbol
 
+REPORTED_CONFIDENCE_INTERVALS = [75, 90, 95, 99]
+
 class StockPredictor:
     """Predicts future stock prices using the StatsForecast model and Polygon API."""
 
@@ -167,7 +169,7 @@ class StockPredictor:
         Returns:
             pd.DataFrame: A DataFrame containing the predicted data.
         """
-        forecast = model.predict(h=periods, level=[75, 90, 95, 99])
+        forecast = model.predict(h=periods, level=REPORTED_CONFIDENCE_INTERVALS)
         return forecast
 
     def get_existing_prediction(self, db: Session, start_time: datetime, end_time: datetime, column: str, symbol_id: int) -> Union[Prediction, None]:

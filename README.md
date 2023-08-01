@@ -25,7 +25,7 @@ To run this project, you will need:
     ```
 3. Start the containers:
     ```
-    docker-compose up
+    POLYGON_API_KEY=XXX docker-compose up #specify the key otherwise you're not going to get real data...
     ```
 4. To stop the containers, use:
     ```

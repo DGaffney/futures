@@ -7,6 +7,8 @@ from app.stock_predictor import StockPredictor
 from app.models import Symbol, Prediction, SessionLocal
 
 app = FastAPI()
+FUTURE_PROJECTION_WINDOW = 3*60 #Three hours into future
+HISTORICAL_DATA_WINDOW=14 #Amount of historical data to review for prediction (bigger is better but slower)
 
 def get_db() -> Generator:
     """
@@ -79,10 +81,10 @@ def ping(background_tasks: BackgroundTasks, symbol_name: str, db: Session = Depe
     if not symbol:
         raise HTTPException(status_code=400, detail="Symbol not found")
     
-    predictor = StockPredictor(os.getenv("POLYGON_API_KEY"), symbol_name, (datetime.now() - timedelta(days=14)).strftime('%Y-%m-%d'), datetime.now().strftime('%Y-%m-%d'), 900000)
+    predictor = StockPredictor(os.getenv("POLYGON_API_KEY"), symbol_name, (datetime.now() - timedelta(days=HISTORICAL_DATA_WINDOW)).strftime('%Y-%m-%d'), datetime.now().strftime('%Y-%m-%d'), 900000)
 
     # Adding task to background tasks
     for aspect in ["o", "c", "h", "l"]:
-        background_tasks.add_task(predictor.prepare_predict_and_save, db, aspect, symbol, 3*60)
+        background_tasks.add_task(predictor.prepare_predict_and_save, db, aspect, symbol, FUTURE_PROJECTION_WINDOW)
     
     return {"message": f"Prediction is being saved for {symbol_name}"}
