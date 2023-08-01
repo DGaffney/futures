@@ -1,3 +1,5 @@
+import os
+from datetime import datetime, timedelta
 from typing import Generator
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Depends
 from sqlalchemy.orm import Session
@@ -16,12 +18,26 @@ def get_db() -> Generator:
     finally:
         db.close()
 
+def get_symbol_by_name(db: Session, symbol_name: str) -> Symbol:
+    return db.query(Symbol).filter(Symbol.name == symbol_name).first()
+
+def get_latest_prediction_by_symbol(db: Session, symbol_id: int) -> Prediction:
+    return db.query(Prediction).filter(Prediction.symbol_id == symbol_id).order_by(Prediction.prediction_time.desc()).first()
+
+@app.get("/symbols")
+def get_all_symbols(db: Session = Depends(get_db)) -> dict:
+    """
+    Fetches all tracked stock symbols.
+    """
+    symbols = db.query(Symbol).all()
+    return {"symbols": [symbol.name for symbol in symbols]}
+
 @app.post("/symbol/{symbol_name}")
 def start_tracking(symbol_name: str, db: Session = Depends(get_db)) -> dict:
     """
     Starts tracking a given stock symbol.
     """
-    db_symbol = db.query(Symbol).filter(Symbol.name == symbol_name).first()
+    db_symbol = get_symbol_by_name(db, symbol_name)
     if db_symbol:
         raise HTTPException(status_code=400, detail="Symbol already tracked")
     symbol = Symbol(name=symbol_name)
@@ -34,7 +50,7 @@ def stop_tracking(symbol_name: str, db: Session = Depends(get_db)) -> dict:
     """
     Stops tracking a given stock symbol.
     """
-    symbol = db.query(Symbol).filter(Symbol.name == symbol_name).first()
+    symbol = get_symbol_by_name(db, symbol_name)
     if not symbol:
         raise HTTPException(status_code=400, detail="Symbol not found")
     db.delete(symbol)
@@ -46,10 +62,10 @@ def get_prediction(symbol_name: str, db: Session = Depends(get_db)) -> dict:
     """
     Fetches the latest prediction for a given stock symbol.
     """
-    symbol = db.query(Symbol).filter(Symbol.name == symbol_name).first()
+    symbol = get_symbol_by_name(db, symbol_name)
     if not symbol:
         raise HTTPException(status_code=400, detail="Symbol not found")
-    prediction = db.query(Prediction).filter(Prediction.symbol_id == symbol.id).order_by(Prediction.prediction_time.desc()).first()
+    prediction = get_latest_prediction_by_symbol(db, symbol.id)
     if not prediction:
         raise HTTPException(status_code=400, detail="No prediction found")
     return {"prediction": prediction.prediction_value}
@@ -59,13 +75,14 @@ def ping(background_tasks: BackgroundTasks, symbol_name: str, db: Session = Depe
     """
     Triggers a new prediction for a given stock symbol and saves it to the database.
     """
-    symbol = db.query(Symbol).filter(Symbol.name == symbol_name).first()
+    symbol = get_symbol_by_name(db, symbol_name)
     if not symbol:
         raise HTTPException(status_code=400, detail="Symbol not found")
     
-    predictor = StockPredictor(os.getenv("POLYGON_API_KEY"), symbol_name, '2023-07-18', '2023-07-31', 1200)
+    predictor = StockPredictor(os.getenv("POLYGON_API_KEY"), symbol_name, (datetime.now() - timedelta(days=14)).strftime('%Y-%m-%d'), datetime.now().strftime('%Y-%m-%d'), 900000)
 
     # Adding task to background tasks
-    background_tasks.add_task(predictor.prepare_predict_and_save, db, symbol, 3*60)
+    for aspect in ["o", "c", "h", "l"]:
+        background_tasks.add_task(predictor.prepare_predict_and_save, db, aspect, symbol, 3*60)
     
     return {"message": f"Prediction is being saved for {symbol_name}"}

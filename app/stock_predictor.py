@@ -1,12 +1,13 @@
-from typing import List, Callable, Dict
-from datetime import datetime, timedelta
+import json
+from typing import List, Callable, Dict, Union
+from datetime import datetime, timedelta, time
 from statsforecast.models import AutoARIMA
 from statsforecast import StatsForecast
 from statsforecast.models import DynamicOptimizedTheta
 import requests
 from sqlalchemy.orm import Session
 import pandas as pd
-from .models import Prediction
+from .models import Prediction, Symbol
 
 class StockPredictor:
     """Predicts future stock prices using the StatsForecast model and Polygon API."""
@@ -92,7 +93,8 @@ class StockPredictor:
         # Resample data to every minute
         df = df.resample('1T').asfreq()
         # Find where the gaps in the time index are <= 60 minutes
-        mask = (df.index.to_series().diff() <= pd.Timedelta(minutes=60))
+        diff = df.index.to_series().diff()
+        mask = ((diff <= pd.Timedelta(minutes=60)) | (diff.isnull()))
         # Interpolate only where mask is True
         df['y'] = df['y'].where(mask).interpolate(method='linear')
         # Reset index
@@ -168,25 +170,57 @@ class StockPredictor:
         forecast = model.predict(h=periods, level=[75, 90, 95, 99])
         return forecast
 
-    def add_predictions(self, session: Session, symbol: 'Symbol', forecast: pd.DataFrame) -> None:
+    def get_existing_prediction(self, db: Session, start_time: datetime, end_time: datetime, column: str, symbol_id: int) -> Union[Prediction, None]:
+        return db.query(Prediction).filter_by(
+            prediction_start_time=start_time,
+            prediction_end_time=end_time,
+            symbol_aspect=column,
+            symbol_id=symbol_id,
+        ).first()
+
+    def store_prediction(self, db: Session, symbol: Symbol, prediction: Prediction, start_time: datetime, end_time: datetime, column: str, safe_value: Dict) -> None:
+        if prediction is None:
+            prediction = Prediction(
+                prediction_start_time=start_time,
+                prediction_end_time=end_time,
+                symbol_aspect=column,
+                prediction_value=safe_value
+            )
+            symbol.predictions.append(prediction)
+            db.add(prediction)
+            db.commit()
+        else:
+            prediction.safe_value = safe_value
+            db.commit()
+        
+    def add_predictions(self, db: Session, symbol: Symbol, column: str, forecast: pd.DataFrame) -> Dict:
         """Adds the predicted data to the database.
         
         Args:
-            session (Session): The SQLAlchemy session.
-            symbol ('Symbol'): The stock symbol object.
+            db (Session): The SQLAlchemy session.
+            symbol (Symbol): The stock symbol object.
             forecast (pd.DataFrame): A DataFrame containing the predicted data.
         """
-        for index, row in forecast.tail(180).iterrows():
-            prediction = Prediction(prediction_time=row['ds'], prediction_value=row['yhat1'])
-            symbol.predictions.append(prediction)
-        session.commit()
+        #force as to_json first to kill any complex float datatypes that would otherwise throw errors when saving...
+        safe_value = json.loads(json.dumps({
+            "timesteps": forecast['ds'].tolist(),
+            "values": forecast['DynamicOptimizedTheta'].tolist(),
+            "lower": forecast['DynamicOptimizedTheta-lo-99'].tolist(),
+            "upper": forecast['DynamicOptimizedTheta-hi-99'].tolist()
+        }))
+        start_time = datetime.combine(datetime.now().date(), time())
+        end_time = start_time+timedelta(minutes=len(safe_value["timesteps"])),
+        prediction = self.get_existing_prediction(db, start_time, end_time, column, symbol.id)
+        # If it does not exist, create a new one
+        self.store_prediction(db, symbol, prediction, start_time, end_time, column, safe_value)
+        return safe_value
 
-    def predict_and_save(self, session: Session, symbol: 'Symbol', model: StatsForecast, periods: int) -> pd.DataFrame:
+    def predict_and_save(self, db: Session, symbol: Symbol, column: str, model: StatsForecast, periods: int) -> pd.DataFrame:
         """Predicts future stock prices and saves them to the database.
         
         Args:
-            session (Session): The SQLAlchemy session.
-            symbol ('Symbol'): The stock symbol object.
+            db (Session): The SQLAlchemy session.
+            symbol (Symbol): The stock symbol object.
             model (StatsForecast): The trained model.
             periods (int): The number of future periods to predict.
         
@@ -194,11 +228,21 @@ class StockPredictor:
             pd.DataFrame: A DataFrame containing the predicted data.
         """
         forecast = self.predict(model, periods)
-        self.add_predictions(session, symbol, forecast)
+        self.add_predictions(db, symbol, column, forecast)
         return forecast
 
-    def prepare_predict_and_save(self, session: Session, column: str, symbol: 'Symbol', periods: int) -> None:
+    def prepare_predict_and_save(self, db: Session, symbol: Symbol, column: str, periods: int) -> None:
+        """Predicts future stock prices and saves them to the database.
+        
+        Args:
+            db (Session): The SQLAlchemy session.
+            symbol (Symbol): The stock symbol object.
+            column (str): The symbol measurement to forecast ('o', 'h', 'c', or 'l')
+            periods (int): The number of future periods to predict.
+        
+        Returns:
+            None
+        """
         df = self.fetch_data(column)
         model = self.train_model(df)
-        import code;code.interact(local=dict(globals(), **locals())) 
-        self.predict_and_save(session, symbol, model, periods)
+        return self.predict_and_save(db, symbol, column, model, periods)
