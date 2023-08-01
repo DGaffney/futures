@@ -89,7 +89,7 @@ This section provides an overview of the HTTP endpoints that our FastAPI applica
 
 - **DELETE /symbol/{symbol_name}**: This endpoint stops tracking a stock symbol. Replace `{symbol_name}` with the name of the stock symbol you want to stop tracking. If the symbol isn't being tracked, the server will respond with a 400 error. On success, the server responds with a message saying that tracking has stopped.
 
-- **GET /symbol/{symbol_name}**: This endpoint returns the latest prediction for a given stock symbol. Replace `{symbol_name}` with the name of the stock symbol you're interested in. If the symbol isn't being tracked, or if there's no prediction available, the server will respond with a 400 error. On success, the server responds with a JSON object containing the prediction value.
+- **GET /symbol/{symbol_name}/{aspect}**: This endpoint returns the latest prediction for a given stock symbol. Replace `{symbol_name}` with the name of the stock symbol you're interested in, and replace `{aspect}` with the stock feature you're interested in (must be one of `['o','c','h','l']` which correspond to Open, Close, High, and Low values). If the symbol isn't being tracked, or if there's no prediction available, the server will respond with a 400 error. On success, the server responds with a JSON object containing the prediction value.
 
 - **GET /symbol/ping/{symbol_name}**: This endpoint triggers a new prediction for a given stock symbol and saves it to the database. Replace `{symbol_name}` with the name of the stock symbol you're interested in. If the symbol isn't being tracked, the server will respond with a 400 error. On success, the server responds with a message saying that the prediction is being saved.
 

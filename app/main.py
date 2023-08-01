@@ -90,5 +90,5 @@ def get_prediction(symbol_name: str, aspect: str, db: Session = Depends(get_db))
     prediction = get_latest_prediction_by_symbol(db, symbol.id)
     if not prediction:
         raise HTTPException(status_code=400, detail="No prediction found")
-    return {"prediction": prediction.prediction_value}
+    return {"prediction": prediction.prediction_value, "symbol": symbol_name, "aspect": aspect}
 

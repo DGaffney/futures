@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 import pandas as pd
 from .models import Prediction, Symbol
 
-REPORTED_CONFIDENCE_INTERVALS = [75, 90, 95, 99]
+REPORTED_CONFIDENCE_INTERVALS = [99]
 
 class StockPredictor:
     """Predicts future stock prices using the StatsForecast model and Polygon API."""
